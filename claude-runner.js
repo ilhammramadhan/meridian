@@ -30,6 +30,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import cron from "node-cron";
+import "./envcrypt.js"; // load meridian/.env into process.env BEFORE config reads it (PAPER_TRADING, DRY_RUN, wallet, RPC…)
 import { config } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -134,7 +135,9 @@ function runCycle(kind) {
     if (!env.ANTHROPIC_BASE_URL) delete env.ANTHROPIC_API_KEY;
 
     const dry = String(env.DRY_RUN).toLowerCase() === "true";
-    logLine(`▶ ${cyc.label} cycle starting (model=${MODEL}, perm=${PERMISSION_MODE}, ${dry ? "DRY_RUN" : "LIVE"})`);
+    const paper = env.PAPER_TRADING === "true";
+    const modeLabel = paper ? "PAPER" : dry ? "DRY_RUN" : "LIVE";
+    logLine(`▶ ${cyc.label} cycle starting (model=${MODEL}, perm=${PERMISSION_MODE}, ${modeLabel})`);
 
     const child = spawn(bin, args, { cwd: __dirname, env, stdio: ["pipe", "pipe", "pipe"], shell: false });
 
@@ -246,9 +249,12 @@ async function main() {
   if (mode === "start") {
     const sMin = Math.max(1, config.schedule.screeningIntervalMin);
     const mMin = Math.max(1, config.schedule.managementIntervalMin);
-    const live = String(process.env.DRY_RUN).toLowerCase() !== "true";
+    const paper = process.env.PAPER_TRADING === "true" || config.paper?.enabled;
+    const dry = String(process.env.DRY_RUN).toLowerCase() === "true";
     logLine(`Meridian Claude runner — screen every ${sMin}m, manage every ${mMin}m (model=${MODEL}, perm=${PERMISSION_MODE})`);
-    if (live) logLine("⚠ LIVE mode — real on-chain transactions enabled. Set DRY_RUN=true to simulate.");
+    if (paper) logLine(`🧪 PAPER mode — virtual trades only, no funds at risk${dry ? " (DRY_RUN on too)" : ""}.`);
+    else if (dry) logLine("DRY-RUN mode — no on-chain transactions.");
+    else logLine("⚠ LIVE mode — real on-chain transactions enabled. Set PAPER_TRADING=true or DRY_RUN=true to simulate.");
 
     cron.schedule(`*/${mMin} * * * *`, () => runGuarded("manage"));
     cron.schedule(`*/${sMin} * * * *`, () => runGuarded("screen"));
