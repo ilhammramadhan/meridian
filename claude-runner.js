@@ -103,6 +103,42 @@ function summarizeTool(block) {
   return "";
 }
 
+function shortAddr(a) {
+  return a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a;
+}
+
+// Replace long base58 addresses in a logged command with short form + resolved token/pair name.
+function annotateAddrs(text, nameMap) {
+  return text.replace(/[1-9A-HJ-NP-Za-km-z]{32,44}/g, (m) =>
+    nameMap[m] ? `${shortAddr(m)}(${nameMap[m]})` : shortAddr(m),
+  );
+}
+
+// Harvest pool/mint → name from a cli.js JSON tool result so later log lines show readable names.
+function harvestNames(raw, nameMap) {
+  const s = raw.indexOf("{");
+  if (s < 0) return;
+  let data;
+  try {
+    data = JSON.parse(raw.slice(s));
+  } catch {
+    return;
+  }
+  const add = (addr, name) => {
+    if (addr && name && !nameMap[addr]) nameMap[addr] = String(name).slice(0, 22);
+  };
+  if (Array.isArray(data?.candidates)) {
+    for (const c of data.candidates) {
+      add(c.pool || c.pool_address, c.name);
+      if (c.token) add(c.token.mint, c.token.symbol);
+    }
+  }
+  if (data?.pool) add(data.pool, data.name);
+  if (data?.base?.mint) add(data.base.mint, data.base.symbol);
+  if (data?.mint) add(data.mint, data.symbol);
+  if (Array.isArray(data?.results)) for (const r of data.results) add(r.mint || r.id, r.symbol);
+}
+
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -144,6 +180,7 @@ function runCycle(kind) {
     let finalText = "";
     const assistantText = [];
     const toolCalls = [];
+    const nameMap = {}; // pool/mint address → readable name, harvested from tool results
     let cost = 0;
     let turns = 0;
     let isError = false;
@@ -170,9 +207,20 @@ function runCycle(kind) {
           if (b.type === "text" && b.text?.trim()) assistantText.push(b.text.trim());
           if (b.type === "tool_use") {
             toolCalls.push(b.name);
-            const detail = summarizeTool(b);
+            const detail = annotateAddrs(summarizeTool(b), nameMap);
             logLine(`  ↳ ${b.name}${detail ? ": " + detail : ""}`);
           }
+        }
+      } else if (ev.type === "user") {
+        for (const b of ev.message?.content ?? []) {
+          if (b.type !== "tool_result") continue;
+          const txt =
+            typeof b.content === "string"
+              ? b.content
+              : Array.isArray(b.content)
+                ? b.content.map((x) => x.text || "").join("")
+                : "";
+          if (txt) harvestNames(txt, nameMap);
         }
       } else if (ev.type === "result") {
         finalText = ev.result || "";
