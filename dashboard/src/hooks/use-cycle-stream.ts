@@ -1,50 +1,55 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { triggerCycle } from "@/lib/server/meridian/controls";
 
 export interface StreamEvent {
   type: string;
   [k: string]: unknown;
 }
 
+/**
+ * Trigger a screen/manage cycle via the local Claude session (fire-and-forget).
+ * The cycle runs in the background; data views refresh via polling. (Token-by-token
+ * live streaming needs this TanStack Start version's server-route API — deferred.)
+ */
 export function useCycleStream() {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [running, setRunning] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
   const qc = useQueryClient();
 
-  const stop = useCallback(() => {
-    esRef.current?.close();
-    esRef.current = null;
-    setRunning(false);
-  }, []);
-
   const start = useCallback(
-    (kind: "screen" | "manage") => {
-      if (typeof EventSource === "undefined") return;
-      esRef.current?.close();
-      setEvents([]);
+    async (kind: "screen" | "manage") => {
       setRunning(true);
-      const es = new EventSource(`/api/meridian/cycle/stream?kind=${kind}`);
-      esRef.current = es;
-      es.onmessage = (m) => {
-        let e: StreamEvent;
-        try {
-          e = JSON.parse(m.data);
-        } catch {
-          return;
+      setEvents([
+        {
+          type: "thinking",
+          text:
+            `${kind} cycle started in the background via your Claude session (paper mode). ` +
+            `Positions, Decisions and Performance refresh as it runs. ` +
+            `For continuous runs use the terminal:  cd meridian && npm run dev:claude`,
+        },
+      ]);
+      try {
+        const r: any = await triggerCycle({ data: { kind } });
+        if (r?.ok === false) {
+          toast.error(r.error || "Failed to start cycle");
+          setEvents((e) => [...e, { type: "error", message: r.error }]);
+        } else {
+          toast.success(`${kind} cycle started`);
         }
-        setEvents((p) => [...p, e]);
-        if (e.type === "tool_result" || e.type === "result") {
-          qc.invalidateQueries({ queryKey: ["positions"] });
-          qc.invalidateQueries({ queryKey: ["decisions"] });
-          qc.invalidateQueries({ queryKey: ["balance"] });
-        }
-        if (e.type === "done") stop();
-      };
-      es.onerror = () => stop();
+      } catch (e: any) {
+        toast.error(e?.message || "Failed to start cycle");
+        setEvents((ev) => [...ev, { type: "error", message: e?.message }]);
+      }
+      setTimeout(() => {
+        setRunning(false);
+        qc.invalidateQueries();
+      }, 4000);
     },
-    [qc, stop],
+    [qc],
   );
 
+  const stop = useCallback(() => setRunning(false), []);
   return { events, running, start, stop };
 }

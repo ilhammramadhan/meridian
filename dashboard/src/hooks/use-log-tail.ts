@@ -1,23 +1,13 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getActivity } from "@/lib/server/meridian/reads";
 import type { ActionEntry } from "@/lib/types";
 
+/** Poll the action trail (logs/actions-*.jsonl) — reliable transport vs SSE in this version. */
 export function useLogTail(max = 300) {
-  const [lines, setLines] = useState<ActionEntry[]>([]);
-
-  useEffect(() => {
-    if (typeof EventSource === "undefined") return;
-    const es = new EventSource("/api/meridian/logs/stream");
-    es.onmessage = (m) => {
-      let e: { type: string; entry?: ActionEntry };
-      try {
-        e = JSON.parse(m.data);
-      } catch {
-        return;
-      }
-      if (e.type === "line" && e.entry) setLines((p) => [e.entry as ActionEntry, ...p].slice(0, max));
-    };
-    return () => es.close();
-  }, [max]);
-
-  return lines;
+  const { data } = useQuery({
+    queryKey: ["activity", max],
+    queryFn: () => getActivity({ data: { limit: max } }),
+    refetchInterval: 4000,
+  });
+  return ((data as any)?.actions || []) as ActionEntry[];
 }
