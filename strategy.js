@@ -32,7 +32,7 @@ export const STRATEGY = Object.freeze({
     maxBotHoldersPct: 30, // max bot holder % (Jupiter audit)
     maxTop10Pct: 60, // max top-10 holder concentration
     excludeHighSupplyConcentration: true,
-    timeframe: "5m",
+    timeframe: "30m",
     category: "trending",
   }),
 

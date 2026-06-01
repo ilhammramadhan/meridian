@@ -44,7 +44,12 @@ export function useCycleStream() {
       }
       setTimeout(() => {
         setRunning(false);
-        qc.invalidateQueries();
+        // §5.5: scope invalidation to the data a cycle actually mutates — invalidating ALL
+        // keys re-forks every cli.js read at once (fork thrash). Reasoning/equity/paper are
+        // already polling on their own intervals.
+        for (const key of [["positions"], ["decisions"], ["balance"], ["paper"], ["candidates"]]) {
+          qc.invalidateQueries({ queryKey: key });
+        }
       }, 4000);
     },
     [qc],

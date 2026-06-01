@@ -20,6 +20,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { spawn } from "node:child_process";
 import { log } from "./logger.js";
+import { isPaper } from "./paper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BRAIN_DIR = path.join(__dirname, "brain");
@@ -163,6 +164,42 @@ function appendLog(message) {
   fs.writeFileSync(LOG_PATH, header + lines.slice(0, LOG_MAX_LINES).join("\n") + "\n");
 }
 
+// ─────────────────────────── ingest idempotency ledger ───────────────────────────
+// A small append-only set of close keys we've already folded in, so a retried or
+// replayed close (same position@closed_at) is never double-counted into the stats.
+
+const INGESTED_PATH = path.join(BRAIN_DIR, ".ingested.json");
+const INGESTED_MAX = 5000;
+
+function readIngestedKeys() {
+  try {
+    if (!fs.existsSync(INGESTED_PATH)) return [];
+    const v = JSON.parse(fs.readFileSync(INGESTED_PATH, "utf8"));
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function closeAlreadyIngested(key) {
+  return readIngestedKeys().includes(key);
+}
+
+function markCloseIngested(key) {
+  try {
+    ensureDir(BRAIN_DIR);
+    const keys = readIngestedKeys();
+    if (keys.includes(key)) return;
+    keys.push(key);
+    fs.writeFileSync(INGESTED_PATH, JSON.stringify(keys.slice(-INGESTED_MAX)));
+  } catch { /* best-effort: dedupe is an optimization, never block the ingest */ }
+}
+
+/** isPaper() but never throws (paper.js reads config/env). */
+function isPaperSafe() {
+  try { return isPaper() === true; } catch { return false; }
+}
+
 // ─────────────────────────── page read/write ───────────────────────────
 
 function readPageFile(filePath) {
@@ -192,10 +229,12 @@ function poolSummary(fm) {
   parts.push(`${num(fm.deploys)} deploy(s)`);
   if (fm.win_rate != null) parts.push(`${round(fm.win_rate)}% win rate`);
   if (fm.avg_pnl_pct != null) parts.push(`avg PnL ${round(fm.avg_pnl_pct)}%`);
+  if (fm.avg_fee_yield_pct != null) parts.push(`avg fee yield ${round(fm.avg_fee_yield_pct)}%`);
   let s = parts.join(", ") + ".";
   if (fm.status && fm.status !== "active") s += ` Status: ${fm.status}.`;
   if (fm.last_outcome) s += ` Last close: ${fm.last_outcome}.`;
   if (fm.cooldown_until) s += ` On cooldown until ${fm.cooldown_until}.`;
+  if (fm.paper) s += " (paper/simulated data).";
   return s;
 }
 
@@ -204,7 +243,9 @@ function tokenSummary(fm) {
   if (fm.deploys != null) parts.push(`${num(fm.deploys)} deploy(s) across pools`);
   if (fm.win_rate != null) parts.push(`${round(fm.win_rate)}% win rate`);
   if (fm.avg_pnl_pct != null) parts.push(`avg PnL ${round(fm.avg_pnl_pct)}%`);
-  return (parts.join(", ") || "No closed deploys yet") + ".";
+  let s = (parts.join(", ") || "No closed deploys yet") + ".";
+  if (fm.paper) s += " (paper/simulated data).";
+  return s;
 }
 
 function strategySummary(fm) {
@@ -259,13 +300,78 @@ function aggregateFromDeploy(fm, d) {
   fm._pnl_sum = round(pnlSum, 2);
   fm.win_rate = round((wins / deploys) * 100, 1);
   fm.avg_pnl_pct = round(pnlSum / deploys, 2);
+
+  // §4.4 zero-fee guard: only fold a fee-yield observation into the learned
+  // fee-edge when the ratio is a real, non-zero number. A 0/blank fee yield /
+  // fee_active_tvl is a windowed-metric artifact (e.g. the close landed outside
+  // the API window) — folding it in would drag avg_fee_yield_pct toward 0 and
+  // make the screener penalize a pool for an artifact, so we skip those.
+  const feeYield = feeYieldOf(d);
+  if (feeYield != null) {
+    const feeN = num(fm._fee_yield_n) + 1;
+    const feeSum = num(fm._fee_yield_sum) + feeYield;
+    fm._fee_yield_n = feeN;
+    fm._fee_yield_sum = round(feeSum, 4);
+    fm.avg_fee_yield_pct = round(feeSum / feeN, 2);
+  }
   return fm;
+}
+
+/**
+ * Extract a usable fee-yield (%) observation from a close payload, or null when
+ * the value is the zero/blank windowed-metric artifact that must NOT be learned.
+ * Prefers an explicit realized fee yield (fees_earned / initial_value) and falls
+ * back to the pool's fee_tvl_ratio. Returns null for 0, blank, or non-finite.
+ */
+function feeYieldOf(d) {
+  if (!d || typeof d !== "object") return null;
+  let yield_;
+  if (Number.isFinite(Number(d.fee_earned_pct))) {
+    yield_ = Number(d.fee_earned_pct);
+  } else if (Number.isFinite(Number(d.initial_value_usd)) && Number(d.initial_value_usd) > 0
+    && Number.isFinite(Number(d.fees_earned_usd))) {
+    yield_ = (Number(d.fees_earned_usd) / Number(d.initial_value_usd)) * 100;
+  } else if (d.fee_tvl_ratio != null && d.fee_tvl_ratio !== "" && Number.isFinite(Number(d.fee_tvl_ratio))) {
+    yield_ = Number(d.fee_tvl_ratio);
+  } else {
+    return null;
+  }
+  // skip the zero/blank artifact (no fee edge learned from a windowed zero)
+  if (!Number.isFinite(yield_) || yield_ === 0) return null;
+  return yield_;
+}
+
+/**
+ * Stable idempotency key for a close. A close is uniquely identified by its
+ * position + the moment it was closed (closed_at / recorded_at). raw_ref alone
+ * is shared across closes (e.g. "lessons.json"), so it can't dedupe on its own.
+ */
+function closeKey({ pool, payload = {}, raw_ref }) {
+  const closedAt = payload.closed_at || payload.recorded_at || "";
+  const id = payload.position || pool || "";
+  if (id || closedAt) return `${id}@${closedAt}`;
+  return raw_ref ? `ref:${raw_ref}` : "";
 }
 
 function ingestClose({ pool, mint, strategy, payload = {}, raw_ref }) {
   const ts = new Date().toISOString();
   const pnl = num(payload.pnl_pct);
   const outcome = pnl > 0 ? "profit" : "loss";
+
+  // §4.4 idempotency: never double-count the same close (e.g. a retried ingest
+  // or a replayed lessons.json). Guard on a stable position@closed_at key.
+  const key = closeKey({ pool, payload, raw_ref });
+  if (key) {
+    if (closeAlreadyIngested(key)) {
+      appendLog(`INGEST close (skipped duplicate) · ${payload.pool_name || pool || "?"} · ${key}`);
+      return;
+    }
+    markCloseIngested(key);
+  }
+
+  // §4.4 tag paper data: a paper (simulated) close must stay distinguishable
+  // from a live one so the screener never treats simulated knowledge as live.
+  const paper = payload.paper === true || isPaperSafe();
 
   // pool page
   if (pool) {
@@ -276,9 +382,10 @@ function ingestClose({ pool, mint, strategy, payload = {}, raw_ref }) {
     aggregateFromDeploy(p.fm, payload);
     p.fm.last_outcome = outcome;
     p.fm.updated_at = ts;
+    if (paper) p.fm.paper = true;
     if (raw_ref) p.fm.source_refs = uniq([...(arr(p.fm.source_refs)), raw_ref]);
     p.body = setSection(p.body, "Summary", poolSummary(p.fm));
-    const line = `- ${ts}: closed ${outcome} ${round(pnl, 2)}% via ${strategy || payload.strategy || "?"} (${payload.close_reason || "n/a"})`;
+    const line = `- ${ts}: closed ${outcome} ${round(pnl, 2)}% via ${strategy || payload.strategy || "?"} (${payload.close_reason || "n/a"})${paper ? " [paper]" : ""}`;
     p.body = setSection(p.body, "What worked / failed", appendBullet(getSection(p.body, "What worked / failed"), line));
     if (mint) p.body = setSection(p.body, "Links", linkLine([refOf("token", mint)]));
     p.fm.needs_summary = true; // M2 LLM resummary picks this up; deterministic Summary is set meanwhile
@@ -290,6 +397,7 @@ function ingestClose({ pool, mint, strategy, payload = {}, raw_ref }) {
     const t = loadOrInitPage("token", mint, { name: payload.base_symbol || payload.pool_name || mint });
     aggregateFromDeploy(t.fm, payload);
     t.fm.updated_at = ts;
+    if (paper) t.fm.paper = true;
     t.body = setSection(t.body, "Summary", tokenSummary(t.fm));
     if (pool) t.body = setSection(t.body, "Links", linkLine([refOf("pool", pool)]));
     writePageFile(t.filePath, t.fm, t.body);
@@ -301,11 +409,12 @@ function ingestClose({ pool, mint, strategy, payload = {}, raw_ref }) {
     const st = loadOrInitPage("strategy", sid, { name: sid });
     aggregateFromDeploy(st.fm, payload);
     st.fm.updated_at = ts;
+    if (paper) st.fm.paper = true;
     st.body = setSection(st.body, "Summary", strategySummary(st.fm));
     writePageFile(st.filePath, st.fm, st.body);
   }
 
-  appendLog(`INGEST close · ${payload.pool_name || pool || "?"} · ${outcome} ${round(pnl, 2)}%`);
+  appendLog(`INGEST close · ${payload.pool_name || pool || "?"} · ${outcome} ${round(pnl, 2)}%${paper ? " [paper]" : ""}`);
 }
 
 function ingestDecision({ pool, payload = {}, raw_ref }) {

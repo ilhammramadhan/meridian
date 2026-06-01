@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Activity, Coins, Layers, Play, TrendingUp, Wallet } from "lucide-react";
+import { Activity, Coins, FlaskConical, Layers, Play, TrendingUp, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/common/page-header";
@@ -7,8 +8,9 @@ import { KpiCard } from "@/components/common/kpi-card";
 import { ReasoningStream } from "@/components/streams/reasoning-stream";
 import { PnlLineChart } from "@/components/charts/pnl-line-chart";
 import { WinRateChart } from "@/components/charts/win-rate-chart";
-import { useBalance, useDecisions, usePerformance, usePositions } from "@/lib/queries";
+import { useBalance, useDecisions, usePaperStatus, usePerformance, usePositions } from "@/lib/queries";
 import { useCycleStream } from "@/hooks/use-cycle-stream";
+import { useReasoningStream } from "@/hooks/use-reasoning-stream";
 import { fmtAgo, fmtPct, fmtSol, fmtUsd } from "@/lib/format";
 
 export const Route = createFileRoute("/_app/")({ component: Overview });
@@ -18,15 +20,20 @@ function Overview() {
   const { data: pos } = usePositions();
   const { data: perf } = usePerformance();
   const { data: decisions } = useDecisions();
-  const { events, running, start } = useCycleStream();
+  const { data: paper } = usePaperStatus();
+  const { running, start } = useCycleStream();
+  const { events: liveEvents, running: liveRunning } = useReasoningStream();
 
   const b = (bal || {}) as Record<string, number>;
   const positions = ((pos as any)?.positions || []) as any[];
   const summary = ((perf as any)?.summary || {}) as Record<string, number>;
   const perfPositions = ((perf as any)?.positions || []) as any[];
+  const pp = (paper || {}) as Record<string, number | boolean | null>;
   let cum = 0;
   const series = perfPositions.map((p, i) => ({ i: i + 1, cum: (cum += Number(p.pnl_usd) || 0) }));
   const recent = ((decisions as any) || []).slice(0, 6) as any[];
+  const isPaper = pp.paper === true;
+  const openPnl = pp.open_pnl_usd;
 
   return (
     <div className="space-y-6">
@@ -46,7 +53,38 @@ function Overview() {
         <KpiCard label="Net PnL" value={fmtUsd(summary.total_pnl_usd)} intent={(summary.total_pnl_usd || 0) >= 0 ? "profit" : "loss"} icon={<Coins className="h-4 w-4" />} />
       </div>
 
-      {(running || events.length > 0) && <ReasoningStream events={events} running={running} />}
+      {isPaper && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FlaskConical className="h-4 w-4 text-primary" /> Paper ledger (simulated)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              <Stat label="Virtual balance" value={fmtSol(pp.balance_sol)} />
+              <Stat label="Deployed" value={fmtUsd(pp.deployed_usd)} sub={`${Number(pp.open) || 0} open`} />
+              <Stat
+                label="Open M2M PnL"
+                value={openPnl == null ? "—" : fmtUsd(openPnl)}
+                intent={openPnl == null ? "default" : Number(openPnl) >= 0 ? "profit" : "loss"}
+              />
+              <Stat
+                label="Realized PnL"
+                value={fmtUsd(pp.realized_pnl_usd)}
+                sub={`${Number(pp.closed_count) || 0} closed`}
+                intent={(Number(pp.realized_pnl_usd) || 0) >= 0 ? "profit" : "loss"}
+              />
+              <Stat label="Win rate" value={fmtPct(pp.win_rate_pct, false)} />
+            </div>
+            {pp.live_marked === false && (
+              <p className="mt-3 text-xs text-[var(--warn)]">Open PnL not marked live (using static deploy value).</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {(liveRunning || liveEvents.length > 0) && <ReasoningStream events={liveEvents} running={liveRunning} />}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -88,6 +126,33 @@ function Overview() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+  intent = "default",
+}: {
+  label: string;
+  value: ReactNode;
+  sub?: ReactNode;
+  intent?: "profit" | "loss" | "default";
+}) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div
+        className={
+          "mt-1 text-lg font-semibold tracking-tight" +
+          (intent === "profit" ? " text-[var(--profit)]" : intent === "loss" ? " text-[var(--loss)]" : "")
+        }
+      >
+        {value}
+      </div>
+      {sub != null && <div className="text-xs text-muted-foreground">{sub}</div>}
     </div>
   );
 }

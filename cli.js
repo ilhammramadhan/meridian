@@ -262,6 +262,7 @@ const { values: flags } = parseArgs({
     text:         { type: "string" },
     pin:          { type: "boolean" },
     llm:          { type: "boolean" },
+    kind:         { type: "string" },
   },
   allowPositionals: true,
   strict: false,
@@ -720,6 +721,132 @@ switch (subcommand) {
     break;
   }
 
+  // ── eval-exits ───────────────────────────────────────────────────
+  case "eval-exits": {
+    const { getDeterministicCloseRule } = await import("./exit-rules.js");
+    const { getMyPositions } = await import("./tools/dlmm.js");
+    const { config } = await import("./config.js");
+
+    const evaluations = await evalExits({ getDeterministicCloseRule, getMyPositions, config });
+    out({ evaluations });
+    break;
+  }
+
+  // ── cycle-context --kind screen|manage ───────────────────────────
+  case "cycle-context": {
+    const kind = flags.kind || argv.filter(a => !a.startsWith("-"))[1];
+    if (kind !== "screen" && kind !== "manage") {
+      die("Usage: meridian cycle-context --kind <screen|manage>");
+    }
+
+    const { getWalletBalances } = await import("./tools/wallet.js");
+
+    if (kind === "screen") {
+      const { config } = await import("./config.js");
+      const brain = await import("./brain.js");
+      const lessons = await import("./lessons.js");
+      const { listBlacklist } = await import("./token-blacklist.js");
+      const { getTopCandidates } = await import("./tools/screening.js");
+
+      const s = config.screening;
+      const gates = {
+        minFeeActiveTvlRatio: s.minFeeActiveTvlRatio,
+        minTvl: s.minTvl,
+        maxTvl: s.maxTvl,
+        minOrganic: s.minOrganic,
+        minHolders: s.minHolders,
+        minMcap: s.minMcap,
+        maxMcap: s.maxMcap,
+        minBinStep: s.minBinStep,
+        maxBinStep: s.maxBinStep,
+        timeframe: s.timeframe,
+        maxTop10Pct: s.maxTop10Pct,
+        maxBotHoldersPct: s.maxBotHoldersPct,
+        minTokenFeesSol: s.minTokenFeesSol,
+        maxPositions: config.risk.maxPositions,
+        deployAmount: config.management.deployAmountSol,
+      };
+
+      const [balance, brainMd, lessonsRes, blacklist, candidates] = await Promise.allSettled([
+        getWalletBalances({}),
+        Promise.resolve().then(() => brain.query({ role: "SCREENER" })),
+        Promise.resolve().then(() =>
+          lessons.getLessonsForPrompt
+            ? lessons.getLessonsForPrompt({ agentType: "SCREENER" })
+            : lessons.listLessons({ limit: 50 })
+        ),
+        Promise.resolve().then(() => listBlacklist()),
+        getTopCandidates({ limit: 5 }),
+      ]);
+
+      out({
+        kind,
+        balance: balance.status === "fulfilled" ? balance.value : null,
+        gates,
+        brain: brainMd.status === "fulfilled" ? brainMd.value : null,
+        lessons: lessonsRes.status === "fulfilled" ? lessonsRes.value : null,
+        blacklist: blacklist.status === "fulfilled" ? blacklist.value : null,
+        candidates: candidates.status === "fulfilled" ? candidates.value : null,
+      });
+    } else {
+      const { getMyPositions } = await import("./tools/dlmm.js");
+      const { getDeterministicCloseRule } = await import("./exit-rules.js");
+      const { config } = await import("./config.js");
+
+      const [balance, positions, exits] = await Promise.allSettled([
+        getWalletBalances({}),
+        getMyPositions({ force: true }),
+        evalExits({ getDeterministicCloseRule, getMyPositions, config }),
+      ]);
+
+      out({
+        kind,
+        balance: balance.status === "fulfilled" ? balance.value : null,
+        positions: positions.status === "fulfilled" ? positions.value : null,
+        exits: exits.status === "fulfilled" ? exits.value : null,
+      });
+    }
+    break;
+  }
+
   default:
     die(`Unknown command: ${subcommand}. Run 'meridian help' for usage.`);
+}
+
+// Force a clean exit for one-shot commands. Importing the Solana/DLMM SDK leaves open
+// handles (RPC sockets, etc.) that otherwise keep node alive for ~minutes — the root of
+// the slow `cli.js positions`/`eval-exits` hangs (agent cycles AND dashboard polls).
+// `start` is the only long-lived command, so it is excluded.
+if (subcommand !== "start") process.exit(0);
+
+// ─── Shared: deterministic exit evaluation ────────────────────────
+// Mirrors the management-cycle decision tree in index.js:
+// close rule → claim (unclaimed fees ≥ minClaimAmount) → instruction → stay.
+async function evalExits({ getDeterministicCloseRule, getMyPositions, config }) {
+  const { positions = [] } = await getMyPositions({ force: true });
+  return positions.map(p => {
+    let action, rule = null, reason = null;
+    if (p.instruction) {
+      action = "INSTRUCTION";
+      reason = typeof p.instruction === "string" ? p.instruction : "instruction set";
+    } else {
+      const closeRule = getDeterministicCloseRule(p, config.management);
+      if (closeRule) {
+        ({ action, rule = null, reason = null } = closeRule);
+      } else if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount) {
+        action = "CLAIM";
+        reason = "unclaimed fees above threshold";
+      } else {
+        action = "STAY";
+        reason = "no rule triggered";
+      }
+    }
+    return {
+      position: p.position,
+      pool_name: p.pair || p.pool_name,
+      action,
+      rule,
+      reason,
+    };
+  });
 }

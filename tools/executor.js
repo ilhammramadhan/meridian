@@ -143,7 +143,9 @@ async function validateDeployPoolThresholds(args) {
   }
 
   const volatility = poolDetailVolatility(volatilityDetail);
-  if (volatility == null || volatility <= 0) {
+  // volatility === 0 is a VALID calm pool: allow it and let bins fall back to defaultBinsBelow.
+  // Reject only null/NaN/negative volatility.
+  if (volatility == null || !Number.isFinite(volatility) || volatility < 0) {
     return {
       pass: false,
       reason: `Pool ${volatilityTimeframe} volatility ${volatility ?? "unknown"} is unusable. Refusing deploy.`,

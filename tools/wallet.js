@@ -156,6 +156,23 @@ export async function swapToken({
   input_mint  = normalizeMint(input_mint);
   output_mint = normalizeMint(output_mint);
 
+  // QW#3: in paper mode, never touch the chain — return a simulated fill.
+  const { isPaper, paperSwap } = await import("../paper.js");
+  if (isPaper()) {
+    const r = await paperSwap({ input_mint, output_mint, amount });
+    // Guarantee the contracted shape even if the helper changes.
+    const fallback = Number(amount) || 0;
+    return {
+      success: true,
+      paper: true,
+      input_amount: r.input_amount ?? fallback,
+      output_amount: r.output_amount ?? fallback,
+      input_mint,
+      output_mint,
+      tx: "paper",
+    };
+  }
+
   if (process.env.DRY_RUN === "true") {
     return {
       dry_run: true,

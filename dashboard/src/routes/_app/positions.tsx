@@ -15,6 +15,7 @@ export const Route = createFileRoute("/_app/positions")({ component: Positions }
 
 function Positions() {
   const { data } = usePositions();
+  const err = (data as any)?.error as string | undefined;
   const all = ((data as any)?.positions || []) as any[];
   const open = all.filter((p) => !p.closed);
   const closed = all.filter((p) => p.closed);
@@ -55,6 +56,11 @@ function Positions() {
   return (
     <div className="space-y-6">
       <PageHeader title="Positions" subtitle="Open LP positions + history" />
+      {err && (
+        <Card className="border-[var(--loss)]/40">
+          <CardContent className="p-4 text-sm text-[var(--loss)]">Failed to load positions: {err}</CardContent>
+        </Card>
+      )}
       <Tabs defaultValue="open">
         <TabsList>
           <TabsTrigger value="open">Open ({open.length})</TabsTrigger>

@@ -130,7 +130,7 @@ POOL MEMORY: Past losses or problems → strong skip signal.
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}]. Volatility must be a positive number; 0/unknown means skip.
+- bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}]. Volatility 0 or unknown → use default bins ${config.strategy.defaultBinsBelow} (do NOT skip).
 - Use amount_y only, keep amount_x=0 and bins_above=0.
 - Bin steps must be [${s.minBinStep}-${s.maxBinStep}].
 - Pick ONE pool only when conviction is real. If only one weak candidate survives, skip and explain why none qualify.

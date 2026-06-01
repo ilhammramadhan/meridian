@@ -3,9 +3,10 @@ import * as reads from "@/lib/server/meridian/reads";
 import * as brainApi from "@/lib/server/meridian/brain";
 
 export const useBalance = () =>
-  useQuery({ queryKey: ["balance"], queryFn: () => reads.getBalance(), refetchInterval: 10_000 });
+  useQuery({ queryKey: ["balance"], queryFn: () => reads.getBalance(), refetchInterval: 15_000 });
 export const usePositions = () =>
-  useQuery({ queryKey: ["positions"], queryFn: () => reads.getPositions(), refetchInterval: 10_000 });
+  // §5.5: 15s (was 10s) — positions forks cli.js; modest backoff reduces fork thrash.
+  useQuery({ queryKey: ["positions"], queryFn: () => reads.getPositions(), refetchInterval: 15_000 });
 export const useCandidates = (limit = 5) =>
   useQuery({ queryKey: ["candidates", limit], queryFn: () => reads.getCandidates({ data: { limit } }), refetchInterval: 30_000 });
 export const useDecisions = () =>
@@ -24,6 +25,16 @@ export const useDiscordSignals = () =>
   useQuery({ queryKey: ["discord"], queryFn: () => reads.getDiscordSignals(), refetchInterval: 30_000 });
 export const useAgentStatus = () =>
   useQuery({ queryKey: ["status"], queryFn: () => reads.getAgentStatus(), refetchInterval: 5_000 });
+export const usePaperStatus = () =>
+  useQuery({ queryKey: ["paper"], queryFn: () => reads.getPaperStatus(), refetchInterval: 15_000 });
+export const useEquityCurve = () =>
+  useQuery({ queryKey: ["equity"], queryFn: () => reads.getEquityCurve({ data: { limit: 2000 } }), refetchInterval: 30_000 });
+export const useReasoning = (limit = 200) =>
+  useQuery({
+    queryKey: ["reasoning", limit],
+    queryFn: () => reads.getReasoning({ data: { limit } }),
+    refetchInterval: 2_000,
+  });
 
 export const useBrainList = (type?: string) =>
   useQuery({ queryKey: ["brain", "list", type ?? "all"], queryFn: () => brainApi.getBrainList({ data: { type } }) });

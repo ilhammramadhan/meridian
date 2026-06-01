@@ -116,8 +116,14 @@ export async function recordPerformance(perf) {
   const pnl_pct = perf.initial_value_usd > 0
     ? (pnl_usd / perf.initial_value_usd) * 100
     : 0;
+  // §4.3: clamp in-range minutes to total held so range_efficiency can never exceed 100%
+  // (mark cadence/rounding can make accrued in-range minutes drift slightly above held).
+  const minutesInRange = Math.min(
+    Number.isFinite(perf.minutes_in_range) ? perf.minutes_in_range : 0,
+    Number.isFinite(perf.minutes_held) ? perf.minutes_held : 0,
+  );
   const range_efficiency = perf.minutes_held > 0
-    ? (perf.minutes_in_range / perf.minutes_held) * 100
+    ? (minutesInRange / perf.minutes_held) * 100
     : 0;
 
   const closeReasonText = String(perf.close_reason || "").toLowerCase();

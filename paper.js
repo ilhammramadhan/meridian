@@ -79,14 +79,38 @@ async function poolFeeRatio(pool_address) {
   }
 }
 
+// QW#7: cache last-known-good SOL price (persisted in paper-state.json as last_sol_price)
+// so a transient 0/throw from the live fetch never poisons valuations or opens zombie
+// positions with deployed_usd = 0.
 async function solUsdPrice() {
+  let live = 0;
   try {
     const { getRealWalletBalances } = await import("./tools/wallet.js");
     const r = await getRealWalletBalances();
-    return num(r.sol_price);
+    live = num(r.sol_price);
   } catch {
-    return 0;
+    live = 0;
   }
+  if (live > 0) {
+    // persist the good price for fallback on future failures
+    try {
+      const state = load();
+      if (num(state.last_sol_price) !== live) {
+        state.last_sol_price = live;
+        save(state);
+      }
+    } catch { /* best-effort cache write */ }
+    return live;
+  }
+  // live fetch failed/returned 0 — fall back to the last-known-good cached price
+  try {
+    const cached = num(load().last_sol_price);
+    if (cached > 0) {
+      log("paper_warn", `solUsdPrice live fetch unavailable; using cached $${cached}`);
+      return cached;
+    }
+  } catch { /* ignore */ }
+  return 0;
 }
 
 function openSol(state) {
@@ -122,6 +146,11 @@ export async function paperDeploy(params) {
   if (!live) return { success: false, error: "Paper: could not read live pool bin/price" };
 
   const solPrice = await solUsdPrice();
+  // QW#7: refuse to open without a usable SOL price — otherwise deployed_usd = 0 creates a
+  // zombie position whose value/PnL can never be marked correctly.
+  if (!(solPrice > 0)) {
+    return { success: false, error: "no SOL price" };
+  }
   const binsBelow = num(params.bins_below, config.strategy.defaultBinsBelow);
   const now = new Date().toISOString();
   const id = `paper_${Date.now()}`;
@@ -147,6 +176,11 @@ export async function paperDeploy(params) {
     minutes_in_range: 0,
     peak_pnl_pct: 0,
     out_of_range_since: null,
+    // §4.3 path-dependent PnL bookkeeping (SOL→token conversions booked once, marked each tick)
+    converted_frac: 0,
+    converted_usd: 0,
+    converted_tokens: 0,
+    avg_fill_price: null,
   };
   save(state);
   log("paper", `Virtual deploy ${state.positions[id].pool_name} ${amount_sol} SOL @ bin ${live.bin} (${binsBelow} below)`);
@@ -183,13 +217,43 @@ async function mark(p, solPrice) {
     p.out_of_range_since = null;
   }
 
-  // price PnL (approximation)
+  // price PnL (approximation) — §4.3 path-dependent.
+  // As price falls through the range, capital is progressively converted SOL→token at the
+  // fill price *at the moment of conversion*. We BOOK that conversion once (persist the
+  // converted USD notional + the avg fill price), then mark the booked token leg at the
+  // current price each tick. This makes dip-then-recover path-dependent: a position that
+  // dipped and recovered keeps the token it bought cheap (a gain), instead of re-deriving
+  // the fill from the current (recovered) bin every mark, which previously washed out the
+  // path entirely.
   let pricePnl = 0;
-  if (live.price < p.entry_price && p.entry_price > 0) {
-    const f = Math.min(1, Math.max(0, (p.entry_bin - live.bin) / Math.max(1, p.bins_below)));
-    const lowerPrice = p.entry_price * Math.pow(1 - num(p.bin_step) / 10000, p.bins_below);
-    const fillPrice = (p.entry_price + Math.max(live.price, lowerPrice)) / 2;
-    pricePnl = f * p.deployed_usd * (live.price / Math.max(fillPrice, 1e-12) - 1);
+  if (p.entry_price > 0) {
+    // fraction of capital that should be converted to token at the *current* depth
+    const fNow = Math.min(1, Math.max(0, (p.entry_bin - live.bin) / Math.max(1, p.bins_below)));
+    const prevConverted = Math.min(1, Math.max(0, num(p.converted_frac)));
+
+    // Book any NEWLY converted slice at the current fill price (monotonic: we only convert
+    // more as price makes new lows; a recovery does not "sell back" the booked token leg —
+    // single-sided SOL ranges fill on the way down and hold the token).
+    if (fNow > prevConverted) {
+      const lowerPrice = p.entry_price * Math.pow(1 - num(p.bin_step) / 10000, p.bins_below);
+      const fillNow = (p.entry_price + Math.max(live.price, lowerPrice)) / 2;
+      const newSlice = fNow - prevConverted;
+      const sliceUsd = newSlice * p.deployed_usd;          // SOL notional converted now
+      const sliceTokens = sliceUsd / Math.max(fillNow, 1e-12);
+      p.converted_usd = num(p.converted_usd) + sliceUsd;   // capital removed from the SOL leg
+      p.converted_tokens = num(p.converted_tokens) + sliceTokens;
+      p.converted_frac = fNow;
+      // weighted avg fill price across all booked slices (documentation/debug)
+      p.avg_fill_price = num(p.converted_usd) / Math.max(num(p.converted_tokens), 1e-12);
+    }
+
+    // Mark the booked token leg at the current price; the unconverted remainder is still SOL
+    // (≈ flat, no IL). PnL = (token leg value now) − (capital spent buying it).
+    const convertedTokens = num(p.converted_tokens);
+    if (convertedTokens > 0) {
+      const tokenValueNow = convertedTokens * live.price;
+      pricePnl = tokenValueNow - num(p.converted_usd);
+    }
   }
 
   const totalValue = p.deployed_usd + num(p.fees_usd) + pricePnl;
@@ -240,14 +304,16 @@ export async function paperPositions() {
   const state = load();
   const ids = Object.keys(state.positions);
   if (!ids.length) return { positions: [], total_positions: 0, paper: true };
+  // §5.4 perf: SOL price fetched ONCE, per-position marks run concurrently.
   const solPrice = await solUsdPrice();
+  const marked = await Promise.all(ids.map((id) => mark(state.positions[id], solPrice)));
   const views = [];
-  for (const id of ids) {
-    const view = await mark(state.positions[id], solPrice);
+  ids.forEach((id, i) => {
+    const view = marked[i];
     state.positions[id] = view._persist;
     delete view._persist;
     views.push(view);
-  }
+  });
   save(state);
   return { positions: views, total_positions: views.length, paper: true };
 }
@@ -282,8 +348,11 @@ export async function paperClose({ position_address, reason }) {
   const view = await mark(p, solPrice);
   delete view._persist;
 
-  const finalValueUsd = view.total_value_usd;
-  // credit virtual balance back: original capital +/- pnl, in SOL terms
+  // §4.3: total_value_usd only reflects UNCLAIMED fees (paperClaim zeroes p.fees_usd and
+  // banks it into claimed_fees_usd). Add already-claimed fees back so a claim-then-close
+  // sequence credits the same total as a single close.
+  const finalValueUsd = view.total_value_usd + num(p.claimed_fees_usd);
+  // credit virtual balance back: original capital +/- pnl + claimed fees, in SOL terms
   const returnedSol = solPrice > 0 ? finalValueUsd / solPrice : p.amount_sol;
   state.balance_sol = num(state.balance_sol) - p.amount_sol + returnedSol;
 
@@ -325,6 +394,29 @@ export async function paperClose({ position_address, reason }) {
 
   log("paper", `Virtual close ${p.pool_name}: pnl ${view.pnl_pct}% ($${view.pnl_usd}) — ${reason || "paper close"}`);
   return { success: true, position: position_address, pnl_pct: view.pnl_pct, pnl_usd: view.pnl_usd, base_mint: p.base_mint, paper: true };
+}
+
+// ─── swap (simulated fill) ───
+// QW#3: in paper mode swaps never touch the chain. We return a simulated 1:?? fill so the
+// agent's claim→swap→close flow runs end-to-end on the virtual ledger. The paper position
+// PnL model already accounts for SOL/token value, so this is a pass-through stub: it reports
+// the input amount as filled and (best-effort) prices the output via the live SOL/token price
+// when both legs are known, otherwise echoes the input amount.
+export async function paperSwap({ input_mint, output_mint, amount }) {
+  const input_amount = num(amount);
+  // We don't model per-token order books here; report a 1:1 notional fill unless a SOL price
+  // is available to convert, which the position-level PnL model already handles separately.
+  const output_amount = input_amount;
+  log("paper", `Virtual swap ${input_amount} ${String(input_mint).slice(0, 6)} → ${String(output_mint).slice(0, 6)}`);
+  return {
+    success: true,
+    paper: true,
+    input_mint,
+    output_mint,
+    input_amount,
+    output_amount,
+    tx: "paper",
+  };
 }
 
 // ─── CLI helpers ───

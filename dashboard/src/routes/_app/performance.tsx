@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/common/page-header";
 import { KpiCard } from "@/components/common/kpi-card";
 import { EmptyState } from "@/components/common/empty-state";
-import { PnlLineChart } from "@/components/charts/pnl-line-chart";
-import { useLessons, usePerformance } from "@/lib/queries";
+import { EquityChart } from "@/components/charts/equity-chart";
+import { useEquityCurve, useLessons, usePerformance } from "@/lib/queries";
 import { fmtPct, fmtUsd } from "@/lib/format";
 
 export const Route = createFileRoute("/_app/performance")({ component: Performance });
@@ -13,11 +13,10 @@ export const Route = createFileRoute("/_app/performance")({ component: Performan
 function Performance() {
   const { data: perf } = usePerformance();
   const { data: les } = useLessons();
+  const { data: equity } = useEquityCurve();
   const summary = ((perf as any)?.summary || {}) as Record<string, number>;
-  const positions = ((perf as any)?.positions || []) as any[];
   const lessons = ((les as any)?.lessons || []) as any[];
-  let cum = 0;
-  const series = positions.map((p, i) => ({ i: i + 1, cum: (cum += Number(p.pnl_usd) || 0) }));
+  const points = (((equity as any)?.points || []) as { ts: number; total_value_usd: number }[]);
 
   return (
     <div className="space-y-6">
@@ -30,9 +29,11 @@ function Performance() {
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>Cumulative PnL (USD)</CardTitle>
+          <CardTitle>Equity curve (portfolio value over time)</CardTitle>
         </CardHeader>
-        <CardContent>{series.length ? <PnlLineChart data={series} /> : <EmptyState message="No closed positions yet." />}</CardContent>
+        <CardContent>
+          {points.length ? <EquityChart data={points} /> : <EmptyState message="No equity history yet — runs append after each cycle." />}
+        </CardContent>
       </Card>
       <Card>
         <CardHeader>

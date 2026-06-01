@@ -15,3 +15,7 @@ export const NODE_BIN = process.env.MERIDIAN_NODE || "node";
 export function meridianPath(...parts: string[]) {
   return path.join(MERIDIAN_DIR, ...parts);
 }
+
+export function logsPath(...parts: string[]) {
+  return path.join(MERIDIAN_DIR, "logs", ...parts);
+}

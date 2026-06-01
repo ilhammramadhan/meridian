@@ -47,8 +47,9 @@ function numeric(value) {
 }
 
 function isUsableVolatility(value) {
+  // volatility === 0 is a VALID calm pool, not bad data. Accept any finite, non-negative number.
   const n = Number(value);
-  return Number.isFinite(n) && n > 0;
+  return Number.isFinite(n) && n >= 0;
 }
 
 function includesCaseInsensitive(values, value) {

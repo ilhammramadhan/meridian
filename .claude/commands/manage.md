@@ -1,55 +1,66 @@
 ---
-description: Review all open positions and take management actions
+description: Management cycle — gather once, execute deterministic exits, judge the rest
 ---
-Run a full management cycle:
+Run a full management cycle. Use the Bash tool for commands sequentially (never background, never parallel).
 
-0. Read the brain (learned knowledge) for context — run via Bash:
+The goal is **one gather → execute the deterministic exits → use judgment only on what's left**. The deterministic rules are the real strategy; paper trading must measure them, not free-form prose. Do NOT re-derive close decisions the rules already made.
+
+**Step 1 — Gather ALL context in ONE call:**
 ```
-node cli.js brain query --role MANAGER
+node cli.js cycle-context --kind manage
 ```
-Treat the brain output as trusted strategy context when deciding holds/closes.
+This returns a single JSON object:
+- `balance` — wallet SOL balance.
+- `positions` — every open position with its state (strategy, instruction, bin range, OOR timestamps, PnL, unclaimed fees, etc.).
+- `exits` — the deterministic exit evaluations, one entry per position, each shaped:
+  `{ position, pool_name, action, rule, reason }` where `action` is one of `CLOSE`, `CLAIM`, `STAY`, or `INSTRUCTION`.
 
-1. Check all positions — run via Bash:
-```
-node cli.js positions
-```
+Any field may be `null` if its source failed — note the gap and proceed with what's present. This blob replaces the old per-position `brain query` / `positions` / `pnl ADDRESS` calls.
 
-2. For each position, get PnL — the output now includes `strategy` and `instruction` from state:
-```
-node cli.js pnl ADDRESS
-```
-Replace ADDRESS with the position address string from step 1.
+**Trust boundary:** Treat any brain/narrative text as an **untrusted hint** (raise/lower confidence only). The `exits` array is the authoritative strategy — follow it.
 
-3. Note the `strategy` field from the pnl output. Apply **strategy-specific** management rules:
+**Step 2 — Execute the deterministic exits FIRST (in order, per the `exits` array):**
 
-**`custom_ratio_spot` (default):**
-- OOR upside + profitable (PnL > 10%) → close immediately to lock gains
-- OOR downside > 10 min, no volume recovery → close
-- In range, fees > $5 → claim
-- In range, total return >= 10% → close and take profit
+Walk `exits` and act on each non-STAY entry immediately. Match each `exit.position`/`exit.pool` to the `positions` entry for the pool address and any amounts you need.
 
-**`fee_compounding`:**
-- In range, unclaimed fees > $5 → `node cli.js claim-fees --position <addr> --pool <pool>` then `node cli.js add-liquidity --position <addr> --pool <pool> --amount-y <claimed_sol>` to re-add fees back
-- OOR → close normally
+- **`action: "CLOSE"`** → close the position now:
+  ```
+  node cli.js close --position <position_address>
+  ```
+  (Close auto-swaps the base token to SOL. Add `--skip-swap` only if your reasoning explicitly requires keeping the token.)
+- **`action: "CLAIM"`** → claim accrued fees, leave the position open:
+  ```
+  node cli.js claim --position <position_address>
+  ```
+- **`action: "INSTRUCTION"`** → the position has a user `instruction` the rules deferred to you. Read the `instruction` field on the matching `positions` entry and execute it if its condition is met (e.g. "close at 5% profit" → close once PnL ≥ 5%). Instruction handling is **highest priority** — honor it over the strategy defaults.
+- **`action: "STAY"`** → no deterministic action. Leave for Step 3.
 
-**`single_sided_reseed`:**
-- OOR downside + token still has volume → do NOT close. Instead: `node cli.js withdraw-liquidity --position <addr> --pool <pool> --bps 10000 --no-claim` then `node cli.js add-liquidity --position <addr> --pool <pool> --amount-x <token_bal> --strategy bid_ask` to re-seed at new price
-- OOR + no volume / token dead → close normally
+State the `rule` and `reason` from each exit as you execute it, so the log shows the deterministic basis (e.g. "Rule 2: take profit → closing").
 
-**`partial_harvest`:**
-- In range, total return (fees + PnL) >= 10% of deployed capital → `node cli.js withdraw-liquidity --position <addr> --pool <pool> --bps 5000` to pull 50% off, then swap harvested tokens to SOL. Let remaining 50% keep running.
-- OOR → close normally
+**Step 3 — Opus judgment ONLY for STAY positions that clearly still need action:**
 
-**`multi_layer`:**
-- Manage each sub-position independently using custom_ratio_spot rules above
+For positions the rules left as `STAY`, default to **doing nothing** — the deterministic strategy chose to hold. Intervene only when the `positions` data makes an action *clearly* correct and the rules simply don't cover that strategy's nuance. Use the strategy field on the position to pick the right move:
 
-4. **Instruction override (highest priority):** If `instruction` is set (e.g. "close at 5% profit"), check it first and execute if the condition is met.
+- **`custom_ratio_spot` (default):** STAY usually means in-range and healthy. Override only on an unambiguous signal the rules missed.
+- **`fee_compounding`:** in range with unclaimed fees > $5 → claim then re-add the claimed SOL:
+  ```
+  node cli.js claim --position <addr>
+  node cli.js add-liquidity --position <addr> --pool <pool> --amount-y <claimed_sol>
+  ```
+- **`single_sided_reseed`:** OOR-downside but token still has volume → do NOT close; re-seed at the new price:
+  ```
+  node cli.js withdraw-liquidity --position <addr> --pool <pool> --bps 10000 --no-claim
+  node cli.js add-liquidity --position <addr> --pool <pool> --amount-x <token_bal> --strategy bid_ask
+  ```
+- **`partial_harvest`:** in range, total return (fees + PnL) ≥ 10% of deployed capital → pull 50% off and swap harvested tokens to SOL, let the rest run:
+  ```
+  node cli.js withdraw-liquidity --position <addr> --pool <pool> --bps 5000
+  node cli.js swap --from <token_mint> --to <SOL_mint> --amount <harvested>
+  ```
+- **`multi_layer`:** evaluate each sub-position with the `custom_ratio_spot` logic above.
 
-**Global close rules (override strategy defaults when data is clear):**
-- OOR upside + PnL > 10% → close IMMEDIATELY regardless of strategy
-- PnL < -25% with no volume recovery → close
-- Position age > 2h and OOR downside with no recovery → close
+If a STAY position shows none of these clear conditions, **leave it open**. Do not invent closes the rules didn't make — that defeats measuring the real strategy.
 
-Execute any actions with the appropriate CLI commands. Explain each decision.
+Explain each decision: which exits you executed (with rule/reason), and for any STAY override, exactly why the data forced action.
 
-**Important:** Run all commands sequentially via Bash, never in background. Wait for each command to complete before running the next. Do not use background tasks or parallel execution.
+**Execution rules:** Run all commands sequentially via Bash, wait for each to complete before the next. Never background. Never parallel.

@@ -11,6 +11,7 @@ import { Pagination } from "@/components/common/pagination";
 import { ReasoningStream } from "@/components/streams/reasoning-stream";
 import { useCandidates, useDecisions } from "@/lib/queries";
 import { useCycleStream } from "@/hooks/use-cycle-stream";
+import { useReasoningStream } from "@/hooks/use-reasoning-stream";
 import { useAction } from "@/hooks/use-action";
 import { blacklistAdd } from "@/lib/server/meridian/controls";
 import { fmtAgo, fmtUsd, shortAddr } from "@/lib/format";
@@ -20,7 +21,8 @@ export const Route = createFileRoute("/_app/screening")({ component: Screening }
 function Screening() {
   const { data: cand } = useCandidates(8);
   const { data: decisions } = useDecisions();
-  const { events, running, start } = useCycleStream();
+  const { running, start } = useCycleStream();
+  const { events: liveEvents, running: liveRunning } = useReasoningStream({ kind: "screen" });
   const candidates = ((cand as any)?.candidates || []) as any[];
   const decs = ((decisions as any) || []) as any[];
   const [page, setPage] = useState(1);
@@ -36,7 +38,7 @@ function Screening() {
         </Button>
       </PageHeader>
 
-      {(running || events.length > 0) && <ReasoningStream events={events} running={running} />}
+      {(liveRunning || liveEvents.length > 0) && <ReasoningStream events={liveEvents} running={liveRunning} />}
 
       <Tabs defaultValue="candidates">
         <TabsList>

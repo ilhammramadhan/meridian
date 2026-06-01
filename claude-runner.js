@@ -25,15 +25,149 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import cron from "node-cron";
 import "./envcrypt.js"; // load meridian/.env into process.env BEFORE config reads it (PAPER_TRADING, DRY_RUN, wallet, RPC…)
 import { config } from "./config.js";
+import { paperStatus } from "./paper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ─── Shared dashboard artifacts (append-only logs + single-flight lock) ───
+const LOG_DIR = path.join(__dirname, "logs");
+const CYCLES_LOG = path.join(LOG_DIR, "cycles.jsonl");
+const REASONING_LOG = path.join(LOG_DIR, "reasoning.jsonl");
+const PAPER_EQUITY_LOG = path.join(LOG_DIR, "paper-equity.jsonl");
+const LOCK_FILE = path.join(__dirname, ".dashboard-cycle.lock");
+
+function ensureLogDir() {
+  try {
+    if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+// Append one JSON line to a dashboard log (never throws into the cycle).
+function appendJsonl(file, obj) {
+  try {
+    ensureLogDir();
+    appendFileSync(file, JSON.stringify(obj) + "\n");
+  } catch {
+    /* best-effort logging — never break a cycle on a log write */
+  }
+}
+
+// Best-effort SOL spot price for paper M2M; falls back to the cached price the
+// paper engine persists in paper-state.json so a transient fetch failure → no NaN.
+async function solSpotPrice() {
+  try {
+    const { getRealWalletBalances } = await import("./tools/wallet.js");
+    const r = await getRealWalletBalances();
+    const live = Number(r?.sol_price);
+    if (Number.isFinite(live) && live > 0) return live;
+  } catch {
+    /* fall through to cache */
+  }
+  try {
+    const s = JSON.parse(readFileSync(path.join(__dirname, "paper-state.json"), "utf8"));
+    const cached = Number(s?.last_sol_price);
+    if (Number.isFinite(cached) && cached > 0) return cached;
+  } catch {
+    /* no cache */
+  }
+  return 0;
+}
+
+// §5.3: append a paper-equity snapshot after a paper cycle.
+// total_value_usd ≈ balance_sol*sol_price + Σ(open position total_value_usd).
+async function appendPaperEquity() {
+  try {
+    const status = await paperStatus();
+    const balanceSol = Number(status?.balance_sol) || 0;
+    const solPrice = await solSpotPrice();
+    const openMtm = (status?.open_positions ?? []).reduce(
+      (s, p) => s + (Number(p?.total_value_usd) || 0),
+      0,
+    );
+    appendJsonl(PAPER_EQUITY_LOG, {
+      ts: new Date().toISOString(),
+      total_value_usd: Math.round((balanceSol * solPrice + openMtm) * 100) / 100,
+      balance_sol: balanceSol,
+      open: Number(status?.open) || 0,
+    });
+  } catch (e) {
+    logLine(`paper-equity snapshot failed: ${e.message}`);
+  }
+}
+
+// ─── §5.5: shared single-flight lock (cross-process, not just in-process) ───
+function isAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0); // signal 0 = existence check, no actual signal
+    return true;
+  } catch (e) {
+    return e.code === "EPERM"; // exists but owned by another user → still alive
+  }
+}
+
+function readLock() {
+  try {
+    return JSON.parse(readFileSync(LOCK_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Acquire the shared lock atomically. Reclaims a stale lock (dead holder or aged
+// past CYCLE_TIMEOUT_MS). Returns true on success, false if a live holder owns it.
+function acquireLock(kind) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(LOCK_FILE, "wx"); // atomic create-exclusive
+      try {
+        writeFileSync(
+          fd,
+          JSON.stringify({ holder: "claude-runner", kind, pid: process.pid, startedAt: new Date().toISOString() }),
+        );
+      } finally {
+        closeSync(fd);
+      }
+      return true;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      const cur = readLock();
+      const ageMs = cur?.startedAt ? Date.now() - new Date(cur.startedAt).getTime() : Infinity;
+      const stale = !cur || !isAlive(cur.pid) || ageMs > CYCLE_TIMEOUT_MS;
+      if (!stale) return false; // a live holder owns it
+      // reclaim the stale lock and retry the atomic create
+      logLine(`↺ reclaiming stale cycle lock (holder pid ${cur?.pid ?? "?"}, kind ${cur?.kind ?? "?"})`);
+      releaseLock();
+    }
+  }
+  return false;
+}
+
+function releaseLock() {
+  try {
+    rmSync(LOCK_FILE, { force: true });
+  } catch {
+    /* best-effort */
+  }
+}
 
 const MODEL = process.env.CLAUDE_MODEL || "opus";
 const PERMISSION_MODE = process.env.CLAUDE_PERMISSION_MODE || "default";
@@ -194,6 +328,16 @@ function runCycle(kind) {
     const modeLabel = paper ? "PAPER" : dry ? "DRY_RUN" : "LIVE";
     logLine(`▶ ${cyc.label} cycle starting (model=${MODEL}, perm=${PERMISSION_MODE}, ${modeLabel})`);
 
+    // §5.1: timestamp for durationMs, and reset reasoning.jsonl so the dashboard
+    // tails ONLY the in-progress cycle (truncate on start, append events live).
+    const startedAt = Date.now();
+    try {
+      ensureLogDir();
+      writeFileSync(REASONING_LOG, "");
+    } catch {
+      /* best-effort */
+    }
+
     const child = spawn(bin, args, { cwd: __dirname, env, stdio: ["pipe", "pipe", "pipe"], shell: false });
 
     let finalText = "";
@@ -221,13 +365,29 @@ function runCycle(kind) {
       }
       if (ev.type === "system" && ev.subtype === "init") {
         logLine(`  session ${ev.session_id} · model ${ev.model}`);
+        appendJsonl(REASONING_LOG, { ts: new Date().toISOString(), kind, type: "init" });
       } else if (ev.type === "assistant") {
         for (const b of ev.message?.content ?? []) {
-          if (b.type === "text" && b.text?.trim()) assistantText.push(b.text.trim());
+          if (b.type === "text" && b.text?.trim()) {
+            assistantText.push(b.text.trim());
+            appendJsonl(REASONING_LOG, {
+              ts: new Date().toISOString(),
+              kind,
+              type: "thinking",
+              text: b.text.trim(),
+            });
+          }
           if (b.type === "tool_use") {
             toolCalls.push(b.name);
             const detail = annotateAddrs(summarizeTool(b), nameMap);
             logLine(`  ↳ ${b.name}${detail ? ": " + detail : ""}`);
+            appendJsonl(REASONING_LOG, {
+              ts: new Date().toISOString(),
+              kind,
+              type: "tool_use",
+              name: b.name,
+              summary: detail,
+            });
           }
         }
       } else if (ev.type === "user") {
@@ -240,12 +400,27 @@ function runCycle(kind) {
                 ? b.content.map((x) => x.text || "").join("")
                 : "";
           if (txt) harvestNames(txt, nameMap);
+          appendJsonl(REASONING_LOG, {
+            ts: new Date().toISOString(),
+            kind,
+            type: "tool_result",
+            summary: annotateAddrs(txt.slice(0, 500), nameMap),
+          });
         }
       } else if (ev.type === "result") {
         finalText = ev.result || "";
         cost = ev.total_cost_usd || 0;
         turns = ev.num_turns || 0;
         isError = ev.is_error === true || (ev.subtype && ev.subtype !== "success");
+        appendJsonl(REASONING_LOG, {
+          ts: new Date().toISOString(),
+          kind,
+          type: "result",
+          text: finalText,
+          cost,
+          turns,
+          error: isError || undefined,
+        });
       }
     });
 
@@ -260,13 +435,30 @@ function runCycle(kind) {
       resolve({ report: e.message, code: -1, isError: true, cost: 0, turns: 0 });
     });
 
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       clearTimeout(killTimer);
+      const durationMs = Date.now() - startedAt;
       const report = (finalText || assistantText.join("\n\n") || "(no output)").trim();
       logLine(`■ ${cyc.label} cycle done (exit ${code}, turns ${turns}, $${cost.toFixed(4)}${isError ? ", ERROR" : ""})`);
       if (toolCalls.length) logLine(`  tools: ${toolCalls.join(", ")}`);
       logLine("──── report ────\n" + report + "\n────────────────");
       if (stderr.trim() && (code !== 0 || isError)) logLine("stderr:\n" + stderr.trim().slice(0, 2000));
+
+      // QW#6: per-cycle record for the dashboard.
+      appendJsonl(CYCLES_LOG, {
+        ts: new Date().toISOString(),
+        kind: cyc.label,
+        durationMs,
+        cost,
+        turns,
+        isError,
+        report,
+      });
+      // §5.1: signal end-of-cycle to live tailers.
+      appendJsonl(REASONING_LOG, { ts: new Date().toISOString(), kind, type: "done" });
+      // §5.3: paper equity snapshot (virtual mode only).
+      if (paper) await appendPaperEquity();
+
       notifyTelegram(
         `<b>Meridian · ${cyc.label}</b>${dry ? " (dry-run)" : ""}\n${escapeHtml(report).slice(0, 3500)}`,
       ).catch((e) => logLine(`telegram notify failed: ${e.message}`));
@@ -282,19 +474,19 @@ function runCycle(kind) {
   });
 }
 
-let running = false;
 async function runGuarded(kind) {
-  if (running) {
-    logLine(`⏭ skip ${kind} — another cycle is still running`);
+  // §5.5: single-flight across processes (runner + dashboard) via shared lock file.
+  if (!acquireLock(kind)) {
+    const cur = readLock();
+    logLine(`⏭ skip ${kind} — another cycle is still running (holder ${cur?.holder ?? "?"}, kind ${cur?.kind ?? "?"}, pid ${cur?.pid ?? "?"})`);
     return;
   }
-  running = true;
   try {
     await runCycle(kind);
   } catch (e) {
     logLine(`✖ ${kind} cycle failed: ${e.message}`);
   } finally {
-    running = false;
+    releaseLock();
   }
 }
 
@@ -341,6 +533,9 @@ async function main() {
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     logLine(`${sig} received — shutting down.`);
+    // §5.5: drop our cycle lock if we hold it, so the next run isn't blocked.
+    const cur = readLock();
+    if (cur?.pid === process.pid) releaseLock();
     process.exit(0);
   });
 }
