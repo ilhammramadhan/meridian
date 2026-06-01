@@ -159,7 +159,12 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   // Build dynamic system prompt with current portfolio state
   const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
   const stateSummary = getStateSummary();
-  const lessons = getLessonsForPrompt({ agentType });
+  let lessons = getLessonsForPrompt({ agentType });
+  try {
+    const brain = await import("./brain.js");
+    const bq = brain.query({ role: agentType });
+    if (bq.markdown) lessons = bq.markdown; // brain (LLM-wiki) is the knowledge source when populated
+  } catch { /* brain optional — fall back to raw lessons */ }
   const perfSummary = getPerformanceSummary();
   const decisionSummary = getDecisionSummary();
   let weightsSummary = null;

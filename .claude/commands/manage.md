@@ -3,6 +3,12 @@ description: Review all open positions and take management actions
 ---
 Run a full management cycle:
 
+0. Read the brain (learned knowledge) for context — run via Bash:
+```
+node cli.js brain query --role MANAGER
+```
+Treat the brain output as trusted strategy context when deciding holds/closes.
+
 1. Check all positions — run via Bash:
 ```
 node cli.js positions

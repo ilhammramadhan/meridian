@@ -320,6 +320,7 @@ export function recordPositionSnapshot(poolAddress, snapshot) {
   }
 
   save(db);
+  import("./brain.js").then((b) => b.ingest({ kind: "snapshot", pool: poolAddress, payload: snapshot })).catch(() => {});
 }
 
 /**

@@ -44,6 +44,10 @@ export function appendDecision(entry) {
   data.decisions.unshift(decision);
   data.decisions = data.decisions.slice(0, MAX_DECISIONS);
   save(data);
+  import("./brain.js").then((b) => b.ingest({
+    kind: "decision", pool: decision.pool, raw_ref: `decision-log.json#${decision.id}`,
+    payload: { type: decision.type, pool_name: decision.pool_name, summary: decision.summary, reason: decision.reason },
+  })).catch(() => {});
   return decision;
 }
 

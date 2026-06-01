@@ -21,6 +21,12 @@ decision-log.json
 hivemind-cache.json
 signal-weights.json
 
+# Brain (LLM-wiki) — derived from the JSON sources above, rebuildable via `meridian brain rebuild`
+brain/
+
+# Dashboard cycle lock (cross-process single-flight)
+.dashboard-cycle.lock
+
 # Logs
 logs/
 

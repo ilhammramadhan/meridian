@@ -253,6 +253,15 @@ const { values: flags } = parseArgs({
     "dry-run":    { type: "boolean" },
     "silent":     { type: "boolean" },
     limit:        { type: "string" },
+    role:         { type: "string" },
+    budget:       { type: "string" },
+    deployer:     { type: "string" },
+    ref:          { type: "string" },
+    type:         { type: "string" },
+    section:      { type: "string" },
+    text:         { type: "string" },
+    pin:          { type: "boolean" },
+    llm:          { type: "boolean" },
   },
   allowPositionals: true,
   strict: false,
@@ -554,6 +563,38 @@ switch (subcommand) {
     if (!flags.pool) die("Usage: meridian pool-memory --pool <addr>");
     const { getPoolMemory } = await import("./pool-memory.js");
     out(getPoolMemory({ pool_address: flags.pool }));
+    break;
+  }
+
+  // ── brain (LLM-wiki knowledge) ───────────────────────────────────
+  case "brain": {
+    const brain = await import("./brain.js");
+    const positionals = argv.filter(a => !a.startsWith("-"));
+    switch (sub2) {
+      case "query": {
+        const budget = flags.budget ? parseInt(flags.budget) : undefined;
+        out(brain.query({ role: flags.role || "GENERAL", pool: flags.pool, mint: flags.mint, deployer: flags.deployer, tokenBudget: budget }));
+        break;
+      }
+      case "lint":    out(await brain.lint()); break;
+      case "rebuild": out({ rebuilt: true, ...(await brain.rebuild()) }); break;
+      case "resummarize": out(await brain.resummarize({ max: flags.limit ? parseInt(flags.limit) : 12 })); break;
+      case "list":    out({ pages: brain.listPages({ type: flags.type }) }); break;
+      case "page": {
+        const ref = positionals[2] || flags.ref;
+        if (!ref) die("Usage: meridian brain page <ref>  (e.g. pools/<addr>)");
+        const page = brain.getPage(ref);
+        if (!page) die(`brain page not found: ${ref}`);
+        out(page);
+        break;
+      }
+      case "curate": {
+        if (!flags.ref) die("Usage: meridian brain curate --ref <ref> [--section Summary] --text <text> [--pin]");
+        out(brain.curate({ ref: flags.ref, section: flags.section || "Summary", text: flags.text, pin: flags.pin }));
+        break;
+      }
+      default: die(`Unknown brain subcommand: ${sub2 || "(none)"}. Use: query, lint, rebuild, list, page, curate`);
+    }
     break;
   }
 

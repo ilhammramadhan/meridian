@@ -29,12 +29,13 @@ node cli.js balance
 ```
 If SOL < (deployAmountSol + gasReserve): stop here — insufficient funds.
 
-**Step 2b — Read memory:**
+**Step 2b — Read brain + memory:**
 ```
+node cli.js brain query --role SCREENER
 node cli.js lessons
 node cli.js blacklist list
 ```
-Note any rules that apply to this cycle. Never deploy to blacklisted tokens.
+The `brain query` returns learned knowledge (pools/tokens/lessons/signals) — treat it as trusted strategy context. Note any rules that apply to this cycle. Never deploy to blacklisted tokens.
 
 **Step 3 — Fetch candidates:**
 ```
@@ -58,8 +59,9 @@ node cli.js pool-detail --pool <pool_address>
 node cli.js active-bin --pool <pool_address>
 node cli.js study --pool <pool_address>
 node cli.js pool-memory --pool <pool_address>
+node cli.js brain query --role SCREENER --pool <pool_address> --mint <mint>
 ```
-If pool-memory shows previous deploys with poor range efficiency or repeated OOR closes, penalise this candidate heavily.
+If pool-memory or the brain shows previous deploys with poor range efficiency or repeated OOR closes, penalise this candidate heavily.
 
 **Step 6 — Analyse and decide:**
 

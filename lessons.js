@@ -177,16 +177,13 @@ export async function recordPerformance(perf) {
     });
   }
 
-  // Evolve thresholds every 5 closed positions
+  // Threshold auto-evolution is DECOMMISSIONED. The trading strategy is now a single
+  // hardcoded source of truth (strategy.js); the gates are not auto-mutated on closes.
+  // Performance observations feed the brain (and a human edit), never the gates.
+  // Darwinian signal-weight recalculation still runs every N closes — it only
+  // re-prioritizes candidate ranking, it does not move any hard gate.
   if (data.performance.length % MIN_EVOLVE_POSITIONS === 0) {
-    const { config, reloadScreeningThresholds } = await import("./config.js");
-    const result = evolveThresholds(data.performance, config);
-    if (result?.changes && Object.keys(result.changes).length > 0) {
-      reloadScreeningThresholds();
-      log("evolve", `Auto-evolved thresholds: ${JSON.stringify(result.changes)}`);
-    }
-
-    // Darwinian signal weight recalculation
+    const { config } = await import("./config.js");
     if (config.darwin?.enabled) {
       const { recalculateWeights } = await import("./signal-weights.js");
       const wResult = recalculateWeights(data.performance, config);
@@ -203,6 +200,12 @@ export async function recordPerformance(perf) {
     eventId: `close:${perf.position}:${entry.recorded_at}`,
   });
 
+  // Brain INGEST (fire-and-forget — never blocks or aborts the close)
+  import("./brain.js").then((b) => b.ingest({
+    kind: "close", pool: perf.pool, mint: perf.base_mint, strategy: perf.strategy,
+    raw_ref: "lessons.json",
+    payload: { ...entry, pool_name: perf.pool_name, base_symbol: perf.base_symbol, close_reason: perf.close_reason },
+  })).catch(() => {});
 }
 
 /**
@@ -512,6 +515,7 @@ export function addLesson(rule, tags = [], { pinned = false, role = null } = {})
   };
   data.lessons.push(lesson);
   save(data);
+  import("./brain.js").then((b) => b.ingest({ kind: "manual_lesson", payload: lesson })).catch(() => {});
   log("lessons", `Manual lesson added${pinned ? " [PINNED]" : ""}${role ? ` [${role}]` : ""}: ${safeRule}`);
   void pushHiveLesson(lesson);
 }

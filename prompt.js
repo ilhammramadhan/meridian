@@ -114,7 +114,7 @@ HARD RULE (no exceptions):
 - bots > ${config.screening.maxBotHoldersPct}% → already hard-filtered before you see the candidate list.
 
 RISK SIGNALS (guidelines — use judgment):
-- top10 > 60% → concentrated, risky
+- top10 > ${s.maxTop10Pct}% → concentrated, risky
 - bundle_pct from OKX = secondary context only, not a hard filter
 - rugpull flag from OKX → major negative score penalty and default to SKIP; only override if smart wallets are present and conviction is otherwise high
 - wash trading flag from OKX → treat as disqualifying even if other metrics look attractive
@@ -130,9 +130,9 @@ POOL MEMORY: Past losses or problems → strong skip signal.
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- bins_below = round(config.strategy.minBinsBelow + (candidate volatility/5)*(config.strategy.maxBinsBelow-config.strategy.minBinsBelow)) clamped to [minBinsBelow,maxBinsBelow]. Volatility must be a positive number; 0/unknown means skip.
+- bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}]. Volatility must be a positive number; 0/unknown means skip.
 - Use amount_y only, keep amount_x=0 and bins_above=0.
-- Bin steps must be [80-125].
+- Bin steps must be [${s.minBinStep}-${s.maxBinStep}].
 - Pick ONE pool only when conviction is real. If only one weak candidate survives, skip and explain why none qualify.
 
 ${weightsSummary ? `${weightsSummary}\nPrioritize candidates whose strongest attributes align with high-weight signals.\n\n` : ""}${lessons ? `LESSONS LEARNED:\n${lessons}\n` : ""}Timestamp: ${new Date().toISOString()}

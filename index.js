@@ -4,6 +4,7 @@ import readline from "readline";
 import path from "path";
 import { fileURLToPath } from "url";
 import { agentLoop } from "./agent.js";
+import * as brain from "./brain.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
@@ -223,7 +224,9 @@ export async function runManagementCycle({ silent = false } = {}) {
     // Snapshot + load pool memory
     const positionData = positions.map((p) => {
       recordPositionSnapshot(p.pool, p);
-      return { ...p, recall: recallForPool(p.pool) };
+      const brainPool = brain.query({ role: "MANAGER", pool: p.pool, mint: p.base_mint }).markdown;
+      const recall = [recallForPool(p.pool), brainPool].filter(Boolean).join("\n");
+      return { ...p, recall };
     });
 
     // JS trailing TP check
@@ -572,6 +575,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
         ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
         : null;
 
+      const brainPool = brain.query({ role: "SCREENER", pool: pool.pool, mint: pool.base?.mint || pool.base_mint }).markdown;
       const block = [
         `POOL: ${pool.name} (${pool.pool})`,
         `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
@@ -585,6 +589,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
         priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
         n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
         mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
+        brainPool ? `  brain: ${brainPool.replace(/\n+/g, " ").slice(0, 500)}` : null,
       ].filter(Boolean).join("\n");
 
       // Stage signals for Darwinian weighting — captured before LLM decides
@@ -756,6 +761,11 @@ Summarize the current portfolio health, total fees earned, and performance of al
   // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
   const briefingTask = cron.schedule(`0 1 * * *`, async () => {
     await runBriefing();
+    // Daily brain lint — flag stale / contradictory / orphan knowledge (deterministic)
+    try {
+      const r = await brain.lint();
+      log("cron", `Brain lint: ${r.pages} pages, ${r.dead_links.length} dead links, ${r.stale.length} stale, ${r.orphans.length} orphans`);
+    } catch (e) { log("cron_error", `Brain lint failed: ${e.message}`); }
   }, { timezone: 'UTC' });
 
   // Every 6h — catch up if briefing was missed (agent restart, crash, etc.)

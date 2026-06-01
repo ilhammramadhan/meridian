@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { STRATEGY } from "../strategy.js";
 import { isBlacklisted } from "../token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
 import { log } from "../logger.js";
@@ -35,7 +36,8 @@ function scoreCandidate(pool) {
   const organic = Number(pool.organic_score || 0);
   const volume = Number(pool.volume_window || 0);
   const holders = Number(pool.holders || 0);
-  return feeTvl * 1000 + organic * 10 + volume / 100 + holders / 100;
+  const w = STRATEGY.scoring;
+  return feeTvl * w.feeTvlWeight + organic * w.organicWeight + volume / w.volumeDivisor + holders / w.holdersDivisor;
 }
 
 function numeric(value) {

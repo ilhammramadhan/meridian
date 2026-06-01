@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { STRATEGY } from "./strategy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -12,7 +13,7 @@ const DEFAULT_HIVEMIND_API_KEY = DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY;
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
   : {};
-export const MIN_SAFE_BINS_BELOW = 35;
+export const MIN_SAFE_BINS_BELOW = STRATEGY.range.minSafeBinsBelow;
 
 function numericConfig(value) {
   const n = Number(value);
@@ -20,9 +21,9 @@ function numericConfig(value) {
 }
 
 const legacyBinsBelow = numericConfig(u.binsBelow);
-const configuredMinBinsBelow = numericConfig(u.minBinsBelow) ?? MIN_SAFE_BINS_BELOW;
+const configuredMinBinsBelow = numericConfig(u.minBinsBelow) ?? STRATEGY.range.minBinsBelow;
 const configuredMaxBinsBelow = numericConfig(u.maxBinsBelow)
-  ?? (legacyBinsBelow != null ? Math.max(legacyBinsBelow, configuredMinBinsBelow) : 69);
+  ?? (legacyBinsBelow != null ? Math.max(legacyBinsBelow, configuredMinBinsBelow) : STRATEGY.range.maxBinsBelow);
 const configuredDefaultBinsBelow = numericConfig(u.defaultBinsBelow) ?? legacyBinsBelow ?? configuredMaxBinsBelow;
 const strategyMinBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Math.round(configuredMinBinsBelow));
 const strategyMaxBinsBelow = Math.max(strategyMinBinsBelow, Math.round(configuredMaxBinsBelow));
@@ -55,34 +56,34 @@ function nonEmptyString(...values) {
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
-    maxPositions:    u.maxPositions    ?? 3,
-    maxDeployAmount: u.maxDeployAmount ?? 50,
+    maxPositions:    u.maxPositions    ?? STRATEGY.sizing.maxPositions,
+    maxDeployAmount: u.maxDeployAmount ?? STRATEGY.sizing.maxDeployAmount,
   },
 
   // ─── Pool Screening Thresholds ───────────
   screening: {
-    excludeHighSupplyConcentration: u.excludeHighSupplyConcentration ?? true,
-    minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? 0.05,
-    minTvl:            u.minTvl            ?? 10_000,
-    maxTvl:            u.maxTvl !== undefined ? u.maxTvl : 150_000,
-    minVolume:         u.minVolume         ?? 500,
-    minOrganic:        u.minOrganic        ?? 60,
-    minQuoteOrganic:   u.minQuoteOrganic   ?? 60,
-    minHolders:        u.minHolders        ?? 500,
-    minMcap:           u.minMcap           ?? 150_000,
-    maxMcap:           u.maxMcap           ?? 10_000_000,
-    minBinStep:        u.minBinStep        ?? 80,
-    maxBinStep:        u.maxBinStep        ?? 125,
-    timeframe:         u.timeframe         ?? "5m",
-    category:          u.category          ?? "trending",
-    minTokenFeesSol:   u.minTokenFeesSol   ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
+    excludeHighSupplyConcentration: u.excludeHighSupplyConcentration ?? STRATEGY.entry.excludeHighSupplyConcentration,
+    minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? STRATEGY.entry.minFeeActiveTvlRatio,
+    minTvl:            u.minTvl            ?? STRATEGY.entry.minTvl,
+    maxTvl:            u.maxTvl !== undefined ? u.maxTvl : STRATEGY.entry.maxTvl,
+    minVolume:         u.minVolume         ?? STRATEGY.entry.minVolume,
+    minOrganic:        u.minOrganic        ?? STRATEGY.entry.minOrganic,
+    minQuoteOrganic:   u.minQuoteOrganic   ?? STRATEGY.entry.minQuoteOrganic,
+    minHolders:        u.minHolders        ?? STRATEGY.entry.minHolders,
+    minMcap:           u.minMcap           ?? STRATEGY.entry.minMcap,
+    maxMcap:           u.maxMcap           ?? STRATEGY.entry.maxMcap,
+    minBinStep:        u.minBinStep        ?? STRATEGY.entry.minBinStep,
+    maxBinStep:        u.maxBinStep        ?? STRATEGY.entry.maxBinStep,
+    timeframe:         u.timeframe         ?? STRATEGY.entry.timeframe,
+    category:          u.category          ?? STRATEGY.entry.category,
+    minTokenFeesSol:   u.minTokenFeesSol   ?? STRATEGY.entry.minTokenFeesSol,  // global fees paid (priority+jito tips). below = bundled/scam
     useDiscordSignals: u.useDiscordSignals ?? false,
     discordSignalMode: u.discordSignalMode ?? "merge", // merge | only
     avoidPvpSymbols:   u.avoidPvpSymbols   ?? true, // avoid exact-symbol rivals with real active pools
     blockPvpSymbols:   u.blockPvpSymbols   ?? false, // hard-filter PVP rivals before the LLM sees them
-    maxBundlePct:      u.maxBundlePct      ?? 30,  // max bundle holding % (OKX advanced-info)
-    maxBotHoldersPct:  u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
-    maxTop10Pct:       u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
+    maxBundlePct:      u.maxBundlePct      ?? STRATEGY.entry.maxBundlePct,  // max bundle holding % (OKX advanced-info)
+    maxBotHoldersPct:  u.maxBotHoldersPct  ?? STRATEGY.entry.maxBotHoldersPct,  // max bot holder addresses % (Jupiter audit)
+    maxTop10Pct:       u.maxTop10Pct       ?? STRATEGY.entry.maxTop10Pct,  // max top 10 holders concentration
     allowedLaunchpads: u.allowedLaunchpads ?? [],  // allow-list launchpads, [] = no allow-list
     blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
@@ -92,10 +93,10 @@ export const config = {
 
   // ─── Position Management ────────────────
   management: {
-    minClaimAmount:        u.minClaimAmount        ?? 5,
+    minClaimAmount:        u.minClaimAmount        ?? STRATEGY.exit.minClaimAmount,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
-    outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
-    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
+    outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? STRATEGY.exit.outOfRangeBinsToClose,
+    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? STRATEGY.exit.outOfRangeWaitMinutes,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
     repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? true,
@@ -104,18 +105,18 @@ export const config = {
     repeatDeployCooldownScope: u.repeatDeployCooldownScope ?? "token", // pool | token | both
     repeatDeployCooldownMinFeeEarnedPct: u.repeatDeployCooldownMinFeeEarnedPct ?? u.repeatDeployCooldownMinFeeYieldPct ?? 0,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
-    takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
-    minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
-    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
-    minSolToOpen:          u.minSolToOpen          ?? 0.55,
-    deployAmountSol:       u.deployAmountSol       ?? 0.5,
-    gasReserve:            u.gasReserve            ?? 0.2,
-    positionSizePct:       u.positionSizePct       ?? 0.35,
+    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? STRATEGY.exit.stopLossPct,
+    takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? STRATEGY.exit.takeProfitPct,
+    minFeePerTvl24h:       u.minFeePerTvl24h       ?? STRATEGY.exit.minFeePerTvl24h,
+    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? STRATEGY.exit.minAgeBeforeYieldCheck, // minutes before low yield can trigger close
+    minSolToOpen:          u.minSolToOpen          ?? STRATEGY.sizing.minSolToOpen,
+    deployAmountSol:       u.deployAmountSol       ?? STRATEGY.sizing.deployAmountSol,
+    gasReserve:            u.gasReserve            ?? STRATEGY.sizing.gasReserve,
+    positionSizePct:       u.positionSizePct       ?? STRATEGY.sizing.positionSizePct,
     // Trailing take-profit
-    trailingTakeProfit:    u.trailingTakeProfit    ?? true,
-    trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
-    trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
+    trailingTakeProfit:    u.trailingTakeProfit    ?? STRATEGY.exit.trailingTakeProfit,
+    trailingTriggerPct:    u.trailingTriggerPct    ?? STRATEGY.exit.trailingTriggerPct,    // activate trailing at X% PnL
+    trailingDropPct:       u.trailingDropPct       ?? STRATEGY.exit.trailingDropPct,  // close when drops X% from peak
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
@@ -123,7 +124,7 @@ export const config = {
 
   // ─── Strategy Mapping ───────────────────
   strategy: {
-    strategy:     u.strategy     ?? "bid_ask",
+    strategy:     u.strategy     ?? STRATEGY.range.strategy,
     minBinsBelow: strategyMinBinsBelow,
     maxBinsBelow: strategyMaxBinsBelow,
     defaultBinsBelow: strategyDefaultBinsBelow,
