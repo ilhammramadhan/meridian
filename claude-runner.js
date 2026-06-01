@@ -154,9 +154,28 @@ async function notifyTelegram(text) {
   });
 }
 
+// Count open positions from the registry (paper or live) without spawning anything.
+function openPositionCount() {
+  try {
+    const paper = process.env.PAPER_TRADING === "true";
+    const s = JSON.parse(readFileSync(path.join(__dirname, paper ? "paper-state.json" : "state.json"), "utf8"));
+    const positions = s.positions || {};
+    return paper
+      ? Object.keys(positions).length
+      : Object.values(positions).filter((p) => !p.closed).length;
+  } catch {
+    return 0; // no registry yet → nothing open
+  }
+}
+
 function runCycle(kind) {
   return new Promise((resolve) => {
     const cyc = CYCLES[kind];
+    // Don't waste a full LLM cycle managing an empty portfolio.
+    if (kind === "manage" && openPositionCount() === 0) {
+      logLine("⏭ MANAGEMENT cycle skipped — no open positions to manage.");
+      return resolve({ report: "no open positions", code: 0, isError: false, cost: 0, turns: 0 });
+    }
     const bin = findClaude();
     const args = [
       "-p",
