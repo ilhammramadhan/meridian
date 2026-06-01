@@ -145,6 +145,23 @@ export async function paperDeploy(params) {
   const live = await liveBin(params.pool_address);
   if (!live) return { success: false, error: "Paper: could not read live pool bin/price" };
 
+  // Enrich missing metadata from the pool so the position shows a readable pair NAME
+  // (not the raw address) plus realistic bin_step/volatility/fee_tvl_ratio.
+  let meta = {};
+  if (!params.pool_name || params.pool_name === params.pool_address || params.bin_step == null || params.volatility == null) {
+    try {
+      const { getPoolDetail } = await import("./tools/screening.js");
+      const d = await getPoolDetail({ pool_address: params.pool_address, timeframe: config.screening.timeframe });
+      meta = {
+        name: d?.name,
+        base_mint: d?.base?.mint ?? d?.base_mint ?? null,
+        bin_step: d?.bin_step,
+        volatility: d?.volatility,
+        fee_tvl_ratio: d?.fee_active_tvl_ratio,
+      };
+    } catch { /* best-effort enrichment */ }
+  }
+
   const solPrice = await solUsdPrice();
   // QW#7: refuse to open without a usable SOL price — otherwise deployed_usd = 0 creates a
   // zombie position whose value/PnL can never be marked correctly.
@@ -157,15 +174,15 @@ export async function paperDeploy(params) {
   state.positions[id] = {
     position: id,
     pool: params.pool_address,
-    pool_name: params.pool_name || params.pool_address,
-    base_mint: params.base_mint || null,
+    pool_name: (params.pool_name && params.pool_name !== params.pool_address) ? params.pool_name : (meta.name || params.pool_address),
+    base_mint: params.base_mint || meta.base_mint || null,
     strategy: params.strategy || config.strategy.strategy,
     amount_sol,
     bins_below: binsBelow,
     bins_above: num(params.bins_above),
-    bin_step: num(params.bin_step),
-    volatility: num(params.volatility) || null,
-    fee_tvl_ratio: num(params.fee_tvl_ratio) || null,
+    bin_step: num(params.bin_step) || num(meta.bin_step),
+    volatility: num(params.volatility) || (Number.isFinite(meta.volatility) ? meta.volatility : null),
+    fee_tvl_ratio: num(params.fee_tvl_ratio) || (Number.isFinite(meta.fee_tvl_ratio) ? meta.fee_tvl_ratio : null),
     organic_score: num(params.organic_score) || null,
     entry_bin: live.bin,
     entry_price: live.price,

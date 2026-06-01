@@ -130,10 +130,23 @@ export const getAgentStatus = createServerFn({ method: "GET" }).handler(async ()
     holder: lock?.holder ?? (recentlyActive ? "agent" : null),
     kind: lock?.kind ?? null,
     since: lock?.startedAt ?? null,
-    dryRun: String(process.env.DRY_RUN).toLowerCase() === "true",
-    paper: String(process.env.PAPER_TRADING).toLowerCase() === "true",
+    dryRun: agentEnvFlag("DRY_RUN"),
+    paper: agentEnvFlag("PAPER_TRADING"),
   };
 });
+
+// Read a boolean flag from the agent's process env OR its .env file. The dashboard process
+// often isn't started with these, but the agent's .env has them — so the LIVE/PAPER and
+// DRY-RUN badges stay accurate regardless of how the dashboard was launched.
+function agentEnvFlag(key: string): boolean {
+  if (String(process.env[key]).toLowerCase() === "true") return true;
+  try {
+    const env = fs.readFileSync(meridianPath(".env"), "utf8");
+    return new RegExp(`^\\s*${key}\\s*=\\s*true\\s*$`, "im").test(env);
+  } catch {
+    return false;
+  }
+}
 
 // ── §5.2 paper ledger ──
 // paper-state.json gives balance / deployed / realized / win-rate instantly (fast file
