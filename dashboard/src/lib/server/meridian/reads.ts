@@ -217,6 +217,37 @@ export const getReasoning = createServerFn({ method: "GET" })
     return { events };
   });
 
+// ── closed positions ──
+// getPositions returns OPEN positions only; closed ones move to paper-state.json `closed[]`
+// (paper) or lessons.json `performance[]` (live). The Positions "Closed" tab reads from here.
+interface ClosedRec {
+  position?: string; pool?: string; pool_name?: string; strategy?: string; amount_sol?: number;
+  pnl_pct?: number; pnl_usd?: number; fees_earned_usd?: number; minutes_held?: number;
+  close_reason?: string; closed_at?: string; recorded_at?: string;
+}
+export const getClosedPositions = createServerFn({ method: "GET" }).handler(async () => {
+  const paper = await readJson<{ closed?: ClosedRec[] }>("paper-state.json", {});
+  let recs: ClosedRec[] = Array.isArray(paper.closed) ? paper.closed : [];
+  if (!recs.length) {
+    const l = await readJson<{ performance?: ClosedRec[] }>("lessons.json", {});
+    recs = Array.isArray(l.performance) ? [...l.performance].reverse() : [];
+  }
+  return recs.map((c) => ({
+    position: c.position,
+    pool: c.pool,
+    pool_name: c.pool_name,
+    strategy: c.strategy,
+    amount_sol: c.amount_sol,
+    pnl_pct: c.pnl_pct,
+    pnl_usd: c.pnl_usd,
+    fees_earned_usd: c.fees_earned_usd,
+    minutes_held: c.minutes_held,
+    close_reason: c.close_reason,
+    closed_at: c.closed_at || c.recorded_at,
+    closed: true,
+  }));
+});
+
 // ── §5.3 equity curve ──
 // Runner appends one row per finished cycle to logs/paper-equity.jsonl. Return it as a
 // time series for a real time-axis chart.

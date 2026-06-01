@@ -27,6 +27,8 @@ export const useAgentStatus = () =>
   useQuery({ queryKey: ["status"], queryFn: () => reads.getAgentStatus(), refetchInterval: 5_000 });
 export const usePaperStatus = () =>
   useQuery({ queryKey: ["paper"], queryFn: () => reads.getPaperStatus(), refetchInterval: 15_000 });
+export const useClosedPositions = () =>
+  useQuery({ queryKey: ["closed-positions"], queryFn: () => reads.getClosedPositions(), refetchInterval: 30_000 });
 export const useEquityCurve = () =>
   useQuery({ queryKey: ["equity"], queryFn: () => reads.getEquityCurve({ data: { limit: 2000 } }), refetchInterval: 30_000 });
 export const useReasoning = (limit = 200) =>

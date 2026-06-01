@@ -6,21 +6,40 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState } from "@/components/common/empty-state";
 import { RangeProgressBar } from "@/components/common/range-progress-bar";
-import { usePositions } from "@/lib/queries";
+import { useClosedPositions, usePositions } from "@/lib/queries";
 import { useAction } from "@/hooks/use-action";
 import { claimFees, closePosition } from "@/lib/server/meridian/controls";
-import { fmtDuration, fmtPct, fmtUsd, pnlClass, shortAddr } from "@/lib/format";
+import { fmtAgo, fmtDuration, fmtPct, fmtUsd, pnlClass, shortAddr } from "@/lib/format";
 
 export const Route = createFileRoute("/_app/positions")({ component: Positions });
 
 function Positions() {
   const { data } = usePositions();
+  const { data: closedData } = useClosedPositions();
   const err = (data as any)?.error as string | undefined;
   const all = ((data as any)?.positions || []) as any[];
   const open = all.filter((p) => !p.closed);
-  const closed = all.filter((p) => p.closed);
-  const close = useAction(closePosition as any, { invalidate: [["positions"]], success: "Close submitted" });
+  const closed = ((closedData as any) || []) as any[];
+  const close = useAction(closePosition as any, { invalidate: [["positions"], ["closed-positions"], ["paper"]], success: "Close submitted" });
   const claim = useAction(claimFees as any, { invalidate: [["positions"]], success: "Claim submitted" });
+
+  const renderClosed = (p: any) => (
+    <Card key={`${p.position || p.pool}-${p.closed_at || ""}`}>
+      <CardContent className="space-y-2 p-4">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">{p.pool_name || shortAddr(p.pool)}</div>
+          <Badge variant="secondary">{p.strategy || "—"}</Badge>
+        </div>
+        <div className="grid grid-cols-3 gap-1 text-xs text-muted-foreground">
+          <span className={pnlClass(p.pnl_pct)}>PnL {fmtPct(p.pnl_pct)}</span>
+          <span>fees {fmtUsd(p.fees_earned_usd)}</span>
+          <span>held {fmtDuration(p.minutes_held)}</span>
+          <span>{p.amount_sol != null ? `${p.amount_sol} SOL` : ""}</span>
+          <span className="col-span-2">{p.close_reason || "closed"}{p.closed_at ? ` · ${fmtAgo(p.closed_at)}` : ""}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
   const renderRow = (p: any) => (
     <Card key={p.position}>
@@ -70,7 +89,7 @@ function Positions() {
           {open.length ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{open.map(renderRow)}</div> : <EmptyState message="No open positions." />}
         </TabsContent>
         <TabsContent value="closed">
-          {closed.length ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{closed.map(renderRow)}</div> : <EmptyState message="No closed positions yet." />}
+          {closed.length ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{closed.map(renderClosed)}</div> : <EmptyState message="No closed positions yet." />}
         </TabsContent>
       </Tabs>
     </div>
