@@ -57,6 +57,12 @@ function getJupiterReferralParams() {
  * Returns USD-denominated values provided by Helius.
  */
 export async function getWalletBalances() {
+  const { isPaper, paperBalance } = await import("../paper.js");
+  if (isPaper()) return paperBalance();
+  return getRealWalletBalances();
+}
+
+export async function getRealWalletBalances() {
   let walletAddress;
   try {
     walletAddress = getWallet().publicKey.toString();

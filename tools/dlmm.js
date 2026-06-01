@@ -467,6 +467,7 @@ export async function deployPosition({
   organic_score,
   initial_value_usd,
 }) {
+  { const { isPaper, paperDeploy } = await import("../paper.js"); if (isPaper()) return paperDeploy({ pool_address, amount_sol, amount_y, strategy, bins_below, bins_above, pool_name, bin_step, volatility, fee_tvl_ratio, organic_score }); }
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
   let activeBinsBelow = bins_below ?? config.strategy.defaultBinsBelow ?? config.strategy.minBinsBelow;
@@ -957,6 +958,7 @@ async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
 
 // ─── Get Position PnL (Meteora API) ─────────────────────────────
 export async function getPositionPnl({ pool_address, position_address }) {
+  { const { isPaper, paperPositionPnl } = await import("../paper.js"); if (isPaper()) return paperPositionPnl({ position_address }); }
   pool_address = normalizeMint(pool_address);
   position_address = normalizeMint(position_address);
   const walletAddress = getWallet().publicKey.toString();
@@ -1152,6 +1154,7 @@ async function fetchRawOpenPositionsFromMeridian({ walletAddress, agentId }) {
 
 // ─── Get My Positions ──────────────────────────────────────────
 export async function getMyPositions({ force = false, silent = false, wallet_address = null } = {}) {
+  { const { isPaper, paperPositions } = await import("../paper.js"); if (isPaper()) return paperPositions(); }
   let walletOverride = null;
   try {
     walletOverride = wallet_address ? new PublicKey(wallet_address).toString() : null;
@@ -1456,6 +1459,7 @@ export async function searchPools({ query, limit = 10 }) {
 
 // ─── Claim Fees ────────────────────────────────────────────────
 export async function claimFees({ position_address }) {
+  { const { isPaper, paperClaim } = await import("../paper.js"); if (isPaper()) return paperClaim({ position_address }); }
   position_address = normalizeMint(position_address);
   if (process.env.DRY_RUN === "true") {
     return { dry_run: true, would_claim: position_address, message: "DRY RUN — no transaction sent" };
@@ -1502,6 +1506,7 @@ export async function claimFees({ position_address }) {
 
 // ─── Close Position ────────────────────────────────────────────
 export async function closePosition({ position_address, reason }) {
+  { const { isPaper, paperClose } = await import("../paper.js"); if (isPaper()) return paperClose({ position_address, reason }); }
   position_address = normalizeMint(position_address);
   if (process.env.DRY_RUN === "true") {
     return { dry_run: true, would_close: position_address, message: "DRY RUN — no transaction sent" };

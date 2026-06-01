@@ -111,5 +111,6 @@ export const getAgentStatus = createServerFn({ method: "GET" }).handler(async ()
     kind: lock?.kind ?? null,
     since: lock?.startedAt ?? null,
     dryRun: String(process.env.DRY_RUN).toLowerCase() === "true",
+    paper: String(process.env.PAPER_TRADING).toLowerCase() === "true",
   };
 });

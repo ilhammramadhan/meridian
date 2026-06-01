@@ -598,6 +598,14 @@ switch (subcommand) {
     break;
   }
 
+  // ── paper (forward paper-trading sim) ────────────────────────────
+  case "paper": {
+    const paper = await import("./paper.js");
+    if (sub2 === "reset") out(paper.paperReset(flags.amount ? parseFloat(flags.amount) : undefined));
+    else out(await paper.paperStatus());
+    break;
+  }
+
   // ── evolve ───────────────────────────────────────────────────────
   case "evolve": {
     const { config } = await import("./config.js");

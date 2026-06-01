@@ -204,6 +204,12 @@ export const config = {
     rsiOverbought: indicatorUserConfig.rsiOverbought ?? 80,
     requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
   },
+
+  // ─── Paper trading (simulation) ─────────
+  paper: {
+    enabled: process.env.PAPER_TRADING === "true" || u.paperTrading === true,
+    balanceSol: Number(process.env.PAPER_SOL) || u.paperSol || 5,
+  },
 };
 
 /**

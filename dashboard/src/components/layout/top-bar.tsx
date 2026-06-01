@@ -11,7 +11,7 @@ import { useAgentStatus } from "@/lib/queries";
 export function TopBar() {
   const { theme, toggleTheme } = useTheme();
   const { data: status } = useAgentStatus();
-  const s = (status || {}) as { dryRun?: boolean; busy?: boolean };
+  const s = (status || {}) as { dryRun?: boolean; busy?: boolean; paper?: boolean };
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b bg-background px-4">
       <SidebarTrigger className="-ml-1" />
@@ -21,7 +21,9 @@ export function TopBar() {
         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input placeholder="Search…" className="h-9 w-56 pl-8" />
       </div>
-      {s.dryRun ? (
+      {s.paper ? (
+        <Badge className="bg-chart-3 text-white">PAPER</Badge>
+      ) : s.dryRun ? (
         <Badge variant="secondary">DRY-RUN</Badge>
       ) : (
         <Badge className="bg-[var(--loss)] text-white">LIVE</Badge>
